@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: inspection-assistant
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: gemma3
+        options:
+          temperature: 0.2
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.core.annotation.MergedAnnotation: ERROR
+    io.netty.resolver.dns: OFF
