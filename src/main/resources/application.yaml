@@ -5,14 +5,25 @@ spring:
     ollama:
       base-url: http://localhost:11434
       chat:
-        model: gemma3
+        model: qwen2.5vl
         options:
           temperature: 0.2
 
 server:
   port: 8080
 
+inspection:
+  camera:
+    frame-interval-ms: 2500
+  ai:
+    confidence-threshold: 0.70
+  image:
+    max-size-mb: 5
+  finding:
+    confirmation-threshold: 2
+
 logging:
   level:
     org.springframework.core.annotation.MergedAnnotation: ERROR
     io.netty.resolver.dns: OFF
+    com.dburnwal.inspectionassistant: INFO

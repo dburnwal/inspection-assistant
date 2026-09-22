@@ -1,0 +1,26 @@
+package com.dburnwal.inspectionassistant.car.domain;
+
+public enum CarPart {
+    FRONT_BUMPER,
+    REAR_BUMPER,
+    FRONT_LEFT_DOOR,
+    FRONT_RIGHT_DOOR,
+    REAR_LEFT_DOOR,
+    REAR_RIGHT_DOOR,
+    HOOD,
+    TRUNK,
+    ROOF,
+    FRONT_LEFT_FENDER,
+    FRONT_RIGHT_FENDER,
+    REAR_LEFT_FENDER,
+    REAR_RIGHT_FENDER,
+    FRONT_LEFT_LIGHT,
+    FRONT_RIGHT_LIGHT,
+    REAR_LEFT_LIGHT,
+    REAR_RIGHT_LIGHT,
+    WINDSHIELD,
+    REAR_WINDSHIELD,
+    SIDE_MIRROR_LEFT,
+    SIDE_MIRROR_RIGHT,
+    UNKNOWN
+}

@@ -1,11 +1,15 @@
 package com.dburnwal.inspectionassistant.controller;
 
-import com.dburnwal.inspectionassistant.dto.FindingResponse;
-import com.dburnwal.inspectionassistant.dto.InspectionResponse;
-import com.dburnwal.inspectionassistant.inspection.Finding;
-import com.dburnwal.inspectionassistant.inspection.InspectionOrchestrator;
-import com.dburnwal.inspectionassistant.inspection.InspectionSession;
-import com.dburnwal.inspectionassistant.inspection.InspectionSessionService.SessionNotFoundException;
+import com.dburnwal.inspectionassistant.adapter.InMemorySessionRepository.SessionNotFoundException;
+import com.dburnwal.inspectionassistant.car.domain.VehicleContext;
+import com.dburnwal.inspectionassistant.car.profile.CarDamageInspectionProfile;
+import com.dburnwal.inspectionassistant.dto.*;
+import com.dburnwal.inspectionassistant.inspection.application.InspectionService;
+import com.dburnwal.inspectionassistant.inspection.application.InspectionService.FrameAnalysisResult;
+import com.dburnwal.inspectionassistant.inspection.domain.InspectionSession;
+import com.dburnwal.inspectionassistant.inspection.domain.TrackedFinding;
+import com.dburnwal.inspectionassistant.inspection.ports.CostEstimationPort;
+import com.dburnwal.inspectionassistant.inspection.ports.CostEstimationPort.CostEstimate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -15,58 +19,125 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
-@RequestMapping("/api/inspection")
+@RequestMapping("/api/inspection/sessions")
 @CrossOrigin(origins = "*")
 public class InspectionController {
 
-    private final InspectionOrchestrator orchestrator;
+    private static final long MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+    private static final String REPORT_DISCLAIMER =
+            "AI-assisted estimate based on visible damage only. Actual workshop quotation may differ.";
 
-    public InspectionController(InspectionOrchestrator orchestrator) {
-        this.orchestrator = orchestrator;
+    private final InspectionService inspectionService;
+    private final CostEstimationPort costEstimationPort;
+
+    // sessionId -> VehicleContext (car-specific, not in generic session)
+    private final Map<String, VehicleContext> vehicleContexts = new ConcurrentHashMap<>();
+
+    public InspectionController(InspectionService inspectionService,
+                                CostEstimationPort costEstimationPort) {
+        this.inspectionService = inspectionService;
+        this.costEstimationPort = costEstimationPort;
     }
 
-    @PostMapping("/session")
-    public Map<String, String> createSession() {
-        InspectionSession session = orchestrator.createSession();
-        return Map.of("sessionId", session.getSessionId());
-    }
-
-    @PostMapping(value = "/{sessionId}/frame", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public InspectionResponse analyzeFrame(@PathVariable String sessionId,
-                                           @RequestParam("image") MultipartFile image) throws IOException {
+    @PostMapping
+    public SessionResponse createSession(@RequestBody(required = false) CreateSessionRequest request) {
+        String profileId = (request != null && request.profileId() != null)
+                ? request.profileId()
+                : CarDamageInspectionProfile.ID;
         try {
-            List<Finding> findings = orchestrator.processFrame(sessionId, image.getBytes());
-            return new InspectionResponse(sessionId, toResponse(findings));
-        } catch (SessionNotFoundException e) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+            InspectionSession session = inspectionService.createSession(profileId);
+            if (request != null && request.vehicle() != null) {
+                VehicleContextRequest v = request.vehicle();
+                vehicleContexts.put(session.getId(),
+                        new VehicleContext(v.make(), v.model(), v.year(), v.variant(), v.city()));
+            }
+            return new SessionResponse(session.getId(), session.getProfileId(), session.getStatus());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
     }
 
     @GetMapping("/{sessionId}")
-    public InspectionResponse getSession(@PathVariable String sessionId) {
+    public SessionResponse getSession(@PathVariable String sessionId) {
         try {
-            InspectionSession session = orchestrator.getSession(sessionId);
-            return new InspectionResponse(sessionId, toResponse(session.getDetectedFindings()));
+            InspectionSession session = inspectionService.getSession(sessionId);
+            return new SessionResponse(session.getId(), session.getProfileId(), session.getStatus());
         } catch (SessionNotFoundException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
         }
     }
 
-    @PostMapping("/{sessionId}/report")
-    public InspectionResponse generateReport(@PathVariable String sessionId) {
+    @PostMapping(value = "/{sessionId}/frames", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public FrameAnalysisResponse analyzeFrame(@PathVariable String sessionId,
+                                              @RequestParam("image") MultipartFile image) throws IOException {
+        validateImage(image);
         try {
-            List<Finding> confirmed = orchestrator.generateReport(sessionId);
-            return new InspectionResponse(sessionId, toResponse(confirmed));
+            FrameAnalysisResult result = inspectionService.processFrame(sessionId, image.getBytes());
+            List<TrackedFindingResponse> responses = toResponses(result.findings());
+            return new FrameAnalysisResponse(sessionId, responses, result.guidance());
         } catch (SessionNotFoundException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
         }
     }
 
-    private List<FindingResponse> toResponse(List<Finding> findings) {
-        return findings.stream()
-                .map(f -> new FindingResponse(f.id(), f.type(), f.description(), f.confidence(), f.severity(), f.action()))
-                .toList();
+    @GetMapping("/{sessionId}/findings")
+    public List<TrackedFindingResponse> getFindings(@PathVariable String sessionId) {
+        try {
+            return toResponses(inspectionService.getFindings(sessionId));
+        } catch (SessionNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    @PostMapping("/{sessionId}/complete")
+    public InspectionReportResponse completeSession(@PathVariable String sessionId) {
+        try {
+            List<TrackedFinding> confirmed = inspectionService.completeSession(sessionId);
+            List<TrackedFindingResponse> responses = toResponses(confirmed);
+            long totalMin = responses.stream().mapToLong(r -> r.costEstimate() != null ? r.costEstimate().minimum() : 0).sum();
+            long totalMax = responses.stream().mapToLong(r -> r.costEstimate() != null ? r.costEstimate().maximum() : 0).sum();
+            InspectionSession session = inspectionService.getSession(sessionId);
+            return new InspectionReportResponse(sessionId, session.getProfileId(), responses, totalMin, totalMax, "INR", REPORT_DISCLAIMER);
+        } catch (SessionNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    private void validateImage(MultipartFile image) {
+        if (image.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image is empty");
+        String contentType = image.getContentType();
+        if (contentType == null || !contentType.startsWith("image/")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid image content type");
+        }
+        if (image.getSize() > MAX_IMAGE_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image exceeds 5MB limit");
+        }
+    }
+
+    private List<TrackedFindingResponse> toResponses(List<TrackedFinding> findings) {
+        return findings.stream().map(tf -> {
+            CostEstimate cost = null;
+            try {
+                cost = costEstimationPort.estimate(tf.getLatest().type(), tf.getLatest().part(), tf.getLatest().severity().name());
+            } catch (Exception ignored) {}
+            return new TrackedFindingResponse(
+                    tf.getLatest().id(),
+                    tf.getLatest().type(),
+                    tf.getLatest().part(),
+                    tf.getLatest().description(),
+                    tf.getLatest().confidence(),
+                    tf.getLatest().severity(),
+                    tf.getLatest().requiresCloserInspection(),
+                    tf.getLatest().guidanceMessage(),
+                    tf.getStatus(),
+                    tf.getObservationCount(),
+                    tf.getFirstSeen(),
+                    tf.getLastSeen(),
+                    cost
+            );
+        }).toList();
     }
 }
