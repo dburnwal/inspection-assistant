@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.Media;
-import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -21,7 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-@Service
 public class OllamaVisionAdapter implements VisionAnalysisPort {
 
     private static final Logger log = LoggerFactory.getLogger(OllamaVisionAdapter.class);

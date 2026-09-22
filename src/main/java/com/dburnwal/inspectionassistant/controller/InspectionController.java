@@ -1,6 +1,8 @@
 package com.dburnwal.inspectionassistant.controller;
 
+import com.dburnwal.inspectionassistant.adapter.ImageResizer;
 import com.dburnwal.inspectionassistant.adapter.InMemorySessionRepository.SessionNotFoundException;
+import com.dburnwal.inspectionassistant.adapter.ai.MockVisionAnalysisAdapter;
 import com.dburnwal.inspectionassistant.car.domain.VehicleContext;
 import com.dburnwal.inspectionassistant.car.profile.CarDamageInspectionProfile;
 import com.dburnwal.inspectionassistant.dto.*;
@@ -32,14 +34,17 @@ public class InspectionController {
 
     private final InspectionService inspectionService;
     private final CostEstimationPort costEstimationPort;
+    private final ImageResizer imageResizer;
 
     // sessionId -> VehicleContext (car-specific, not in generic session)
     private final Map<String, VehicleContext> vehicleContexts = new ConcurrentHashMap<>();
 
     public InspectionController(InspectionService inspectionService,
-                                CostEstimationPort costEstimationPort) {
+                                CostEstimationPort costEstimationPort,
+                                ImageResizer imageResizer) {
         this.inspectionService = inspectionService;
         this.costEstimationPort = costEstimationPort;
+        this.imageResizer = imageResizer;
     }
 
     @PostMapping
@@ -71,13 +76,19 @@ public class InspectionController {
     }
 
     @PostMapping(value = "/{sessionId}/frames", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public FrameAnalysisResponse analyzeFrame(@PathVariable String sessionId,
-                                              @RequestParam("image") MultipartFile image) throws IOException {
+    public FrameAnalysisResponse analyzeFrame(
+            @PathVariable String sessionId,
+            @RequestParam("image") MultipartFile image,
+            @RequestHeader(value = "X-Frame-Id", required = false) String frameId) throws IOException {
         validateImage(image);
         try {
-            FrameAnalysisResult result = inspectionService.processFrame(sessionId, image.getBytes());
-            List<TrackedFindingResponse> responses = toResponses(result.findings());
-            return new FrameAnalysisResponse(sessionId, responses, result.guidance());
+            byte[] imageBytes = imageResizer.resize(image.getBytes());
+            // Encode frameId for MockVisionAnalysisAdapter when provided
+            if (frameId != null && !frameId.isBlank()) {
+                imageBytes = MockVisionAnalysisAdapter.encodeFrameId(frameId, imageBytes);
+            }
+            FrameAnalysisResult result = inspectionService.processFrame(sessionId, imageBytes);
+            return new FrameAnalysisResponse(sessionId, toResponses(result.findings()), result.guidance());
         } catch (SessionNotFoundException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
         }

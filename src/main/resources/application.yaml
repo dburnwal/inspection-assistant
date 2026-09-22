@@ -13,14 +13,24 @@ server:
   port: 8080
 
 inspection:
+  ai:
+    provider: ollama        # ollama | mock
+    confidence-threshold: 0.70
+
   camera:
     frame-interval-ms: 2500
-  ai:
-    confidence-threshold: 0.70
+
   image:
     max-size-mb: 5
+    max-width: 1280
+    max-height: 720
+
   finding:
     confirmation-threshold: 2
+
+  demo:
+    enabled: true
+    auto-play-interval-ms: 2500
 
 logging:
   level:
