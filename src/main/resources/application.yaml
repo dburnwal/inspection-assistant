@@ -6,8 +6,11 @@ spring:
       base-url: http://localhost:11434
       chat:
         model: qwen2.5vl
-        options:
-          temperature: 0.2
+      init:
+        pull-model-strategy: never
+        chat:
+          options:
+            temperature: 0.2
 
 server:
   port: 8080
